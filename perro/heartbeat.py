@@ -170,7 +170,7 @@ How to work:
 
 Your whole reply must be one plain JSON object, exactly as below. Do not use
 any built-in function-calling format or special markup; tools are requested
-only through the "tool" field. Your tools come to you as the list above, in
+only through the "tool" or "tools" field. Your tools come to you as the list above, in
 text, never as built-in functions, on every model you might run on: writing
 the JSON is how you use them, and they work. If the model offers built-in
 tools of its own (a shell, exec, agents), those aren't yours and do nothing
@@ -179,6 +179,12 @@ here; don't count them, use them or describe them as yours.
 Reply with a JSON object. To use a tool:
 {{"thought": "<what you're thinking>", "tool": "<tool name>", "args": {{...}}}}
 You'll get the result, then reply again.
+To use several independent tools in one reply (one model call instead of one
+per tool; each call still counts toward your {MAX_TOOL_CALLS}):
+{{"thought": "<what you're thinking>",
+  "tools": [{{"tool": "<name>", "args": {{...}}}}, {{"tool": "<name>", "args": {{...}}}}]}}
+Batch only calls that don't depend on each other's results; when one call
+needs what another returns, keep them in separate replies.
 
 To finish this wake-up:
 {{"thought": "<what you're thinking>",
@@ -278,6 +284,27 @@ def _combine(objects: list[dict], rest: str) -> tuple[dict, str]:
     return merged, " ".join(conflicts + ([rest] if rest else []))
 
 
+def _tool_requests(decision: dict) -> list[tuple[str, dict]]:
+    """Normalize a reply's tool request(s) to a list of (name, args).
+
+    Accepts the single form {"tool": name, "args": {...}} and the batch form
+    {"tools": [{"tool": name, "args": {...}}, ...]}. Anything else yields no
+    requests; the caller decides whether that means "done" or "malformed".
+    """
+    if isinstance(decision.get("tools"), list):
+        requests = []
+        for entry in decision["tools"]:
+            if isinstance(entry, dict) and entry.get("tool"):
+                args = entry.get("args", {})
+                requests.append((str(entry["tool"]),
+                                 args if isinstance(args, dict) else {}))
+        return requests
+    if decision.get("tool"):
+        args = decision.get("args", {})
+        return [(str(decision["tool"]), args if isinstance(args, dict) else {})]
+    return []
+
+
 def beat(memory: Memory, client: ModelClient, prompt: str = SYSTEM_PROMPT,
          name: str | None = DEFAULT_CONFIG["name"]) -> int:
     """Run one wake-up. Returns how many minutes to sleep afterwards."""
@@ -335,46 +362,63 @@ def beat(memory: Memory, client: ModelClient, prompt: str = SYSTEM_PROMPT,
                               f"not used: {dropped[:500]}")
             memory.record("thought", str(decision.get("thought", "")).strip() or "(empty)")
 
-            if "tool" not in decision:
+            requests = _tool_requests(decision)
+            if not requests:
+                if "tool" in decision or "tools" in decision:
+                    # It tried to call tools but the shape was wrong. Say so
+                    # and let it try again, rather than reading it as "done".
+                    messages.append({"role": "assistant", "content": reply.text})
+                    messages.append({"role": "user", "content":
+                        "That tool request wasn't usable. Use "
+                        '{"tool": "<name>", "args": {...}} or '
+                        '{"tools": [{"tool": "<name>", "args": {...}}, ...]}.'})
+                    continue
                 break
-            name, args = str(decision["tool"]), decision.get("args", {})
-            if tool_calls >= MAX_TOOL_CALLS:
-                result = (f"REFUSED: that call was NOT run (limit of {MAX_TOOL_CALLS} per wake-up). "
-                          "Nothing you just asked for happened. Do not tell yourself or your owner "
-                          "that it did. Write your notes saying what is still unfinished, with the "
-                          "next step, and ask for a short next wake-up to continue.")
-            else:
-                result = tools.run(memory, name, args)
-                tool_calls += 1
-                remaining = MAX_TOOL_CALLS - tool_calls
-                if remaining == TOOL_BUDGET_WARN_AT:
-                    # One warning, at the moment it still helps: small models
-                    # especially tend to spend their last calls starting new
-                    # work instead of finishing. Tell it to land the plane.
-                    result += (
-                        f"\n(Heads up: you have {remaining} tool calls left this wake-up. "
-                        "Do the one essential thing still needed, then give your final "
-                        "answer with your notes, next_wake_minutes, and any message. "
-                        "Don't start anything new.)"
-                    )
-            if decision.get("message"):
-                # Written before the tool ran, so it may be out of date by now.
-                result += ("\n(The \"message\" in that reply was NOT sent: messages go out only "
-                           "from your final reply, or with the message_owner tool.)")
-            first_line = result.splitlines()[0] if result else ""
-            # The header (all Perro's page shows) gets a short version of the
-            # args; write_file content can be huge. The full args and result
-            # go in the body, so the log keeps every version of every file.
-            args_json = json.dumps(args, ensure_ascii=False)
-            short_args = args_json if len(args_json) <= 200 else args_json[:200] + "...}"
-            memory.record("tool", f"{name} {short_args} -> {first_line}\n"
-                                  f"args: {args_json}\n{result}")
+            results = []
+            for name, args in requests:
+                if tool_calls >= MAX_TOOL_CALLS:
+                    result = (f"REFUSED: that call was NOT run (limit of {MAX_TOOL_CALLS} per wake-up). "
+                              "Nothing you just asked for happened. Do not tell yourself or your owner "
+                              "that it did. Write your notes saying what is still unfinished, with the "
+                              "next step, and ask for a short next wake-up to continue.")
+                else:
+                    result = tools.run(memory, name, args)
+                    tool_calls += 1
+                    remaining = MAX_TOOL_CALLS - tool_calls
+                    if remaining == TOOL_BUDGET_WARN_AT:
+                        # One warning, at the moment it still helps: small models
+                        # especially tend to spend their last calls starting new
+                        # work instead of finishing. Tell it to land the plane.
+                        result += (
+                            f"\n(Heads up: you have {remaining} tool calls left this wake-up. "
+                            "Do the one essential thing still needed, then give your final "
+                            "answer with your notes, next_wake_minutes, and any message. "
+                            "Don't start anything new.)"
+                        )
+                if decision.get("message"):
+                    # Written before the tool ran, so it may be out of date by now.
+                    result += ("\n(The \"message\" in that reply was NOT sent: messages go out only "
+                               "from your final reply, or with the message_owner tool.)")
+                first_line = result.splitlines()[0] if result else ""
+                # The header (all Perro's page shows) gets a short version of the
+                # args; write_file content can be huge. The full args and result
+                # go in the body, so the log keeps every version of every file.
+                args_json = json.dumps(args, ensure_ascii=False)
+                short_args = args_json if len(args_json) <= 200 else args_json[:200] + "...}"
+                memory.record("tool", f"{name} {short_args} -> {first_line}\n"
+                                      f"args: {args_json}\n{result}")
+                results.append((name, result))
             # The model's own request and the result both go on the page, so
             # the next call sees the whole exchange so far, minus the bulk of
             # older results.
             trim_last_result(messages)
             messages.append({"role": "assistant", "content": reply.text})
-            messages.append({"role": "user", "content": f"Tool result:\n{result}"})
+            if len(results) == 1:
+                messages.append({"role": "user", "content": f"Tool result:\n{results[0][1]}"})
+            else:
+                combined = "\n\n".join(f"{i + 1}. {name}:\n{result}"
+                                       for i, (name, result) in enumerate(results))
+                messages.append({"role": "user", "content": f"Tool results:\n{combined}"})
         else:
             raise ValueError("kept requesting tools past the limit")
 
