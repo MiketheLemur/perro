@@ -44,6 +44,11 @@ MAX_WAKE_MINUTES = 24 * 60
 RETRY_MINUTES = 30
 # Most tool calls allowed in one wake-up, so Perro can't loop forever.
 MAX_TOOL_CALLS = 10
+# When this many calls remain, the next tool result carries a warning so Perro
+# can land the plane instead of hitting the refusal. Small models especially
+# tend to keep calling tools past the point of usefulness; the warning is
+# cheaper than a wasted wake-up.
+TOOL_BUDGET_WARN_AT = 2
 # Every model call resends the whole wake-up so far, so ten page fetches
 # meant the first page was paid for ten times. Only the latest tool result
 # stays whole; once a newer one arrives, a long one is cut to its start.
@@ -341,6 +346,17 @@ def beat(memory: Memory, client: ModelClient, prompt: str = SYSTEM_PROMPT,
             else:
                 result = tools.run(memory, name, args)
                 tool_calls += 1
+                remaining = MAX_TOOL_CALLS - tool_calls
+                if remaining == TOOL_BUDGET_WARN_AT:
+                    # One warning, at the moment it still helps: small models
+                    # especially tend to spend their last calls starting new
+                    # work instead of finishing. Tell it to land the plane.
+                    result += (
+                        f"\n(Heads up: you have {remaining} tool calls left this wake-up. "
+                        "Do the one essential thing still needed, then give your final "
+                        "answer with your notes, next_wake_minutes, and any message. "
+                        "Don't start anything new.)"
+                    )
             if decision.get("message"):
                 # Written before the tool ran, so it may be out of date by now.
                 result += ("\n(The \"message\" in that reply was NOT sent: messages go out only "
