@@ -91,3 +91,21 @@ already names the limit, and the refusal message already tells Perro what to
 do when it's out — this fills the gap between them, giving it a chance to
 land the plane before the refusal. Verified with a fake model: warning on
 tool call 8 of 10, exactly once, refusal still intact, beat completes.
+
+**Batch tool calls (2026-10-18, `perro/heartbeat.py`).** A reply can now
+carry `"tools": [{"tool": name, "args": {...}}, ...]` — several independent
+calls in one model call instead of one per reply. Each call still counts
+toward the 10-per-wake-up budget (enforced per entry, so a batch can run
+partway and refuse the rest), each is logged as its own tool event, and the
+results come back numbered in one message. The old singular `"tool"` form is
+unchanged. A `"tools"` key with the wrong shape gets a correction and another
+pass, instead of being read as "done".
+
+Why: Perro's loop was one model call per tool step, and the wake is the
+expensive part — model round-trips, not the tool work. Independent calls
+(list two files, check calendar and inbox) used to cost a full call each.
+Batching is the standard shape for agent loops (it's how Mike himself works),
+and it stacks with the budget warning: fewer calls burned means more room
+before the refusal. Verified with a fake model: a 2-call batch + singular +
+malformed batch (corrected, not finished) in 4 model calls; budget holds
+mid-batch (10 run, 2 refused); the budget warning still fires exactly once.
