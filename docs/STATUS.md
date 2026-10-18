@@ -71,3 +71,23 @@ Not yet tested: the Mac installer (`scripts/install_mac.py`, which doesn't know 
 5. **Codex, GitHub and Vercel**, in phases on top of the approval step: the workshop, the GitHub relay and the Vercel relay (all done, above). Left: a live publish through the approval, and Perro telling the owner a site is ready (it can, with message_owner and the preview link). Other outside actions (accepting invites, deleting, spending) reuse the approval step as they come.
 6. **Later:** a shell, only inside a container.
 
+## Fork notes (MiketheLemur/perro, 2026-10-18)
+
+T asked Mike to fork Perro and advance it in his own direction on the fork —
+not to run it (no local model is strong enough), and never to push back to
+silascroe/perro. This is the fork's own log of what diverges.
+
+**Tool-budget warning (2026-10-18, `perro/heartbeat.py`).** When two tool
+calls remain in a wake-up, the next tool result carries a heads-up telling
+Perro to do the one essential thing still needed and then give its final
+answer (notes, next_wake_minutes, message) — not to start anything new. New
+constant `TOOL_BUDGET_WARN_AT = 2`, fires exactly once per wake-up.
+
+Why: small models burn their last calls starting new work instead of
+finishing. On T's own testing, a 5-call limit ran out before Perro's report
+and its notes claimed it had reported; on Mike's 1.5B Lobo experiment the
+model looped on recall and never emitted a final answer at all. The prompt
+already names the limit, and the refusal message already tells Perro what to
+do when it's out — this fills the gap between them, giving it a chance to
+land the plane before the refusal. Verified with a fake model: warning on
+tool call 8 of 10, exactly once, refusal still intact, beat completes.
