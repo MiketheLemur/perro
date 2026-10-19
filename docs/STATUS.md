@@ -118,3 +118,25 @@ Caught by testing the batch feature itself: a 10 KB batched result is whole on
 the call that made it and 192 chars on the next. This is the cost blowup the
 August notes fought (one 10-call wake-up at ~227k input tokens); batches would
 have reopened it.
+
+**Wake spend ledger (2026-10-18, new `perro/spend.py`, wired into `perro/heartbeat.py`).**
+The prompt tells Perro that wake-ups cost its owner money, but the only record
+was raw counts on each "sleep" log line — nothing the model could see before
+deciding to act. Now every finished wake-up (failed ones included) adds its
+tokens to `home/spend.json` — machine state, next to `dream.state`, never in
+the owner's `home.json` — and the wake-up page carries a `## Spend` section:
+today's wakes and tokens in/out (cached split out), plus all-time totals once
+they differ. The day rolls over at local midnight; a missing or corrupt state
+file starts fresh.
+
+Deliberately tokens, not money: no prices are baked in, because pricing moves
+and differs per backend. The model already knows wakes cost money; this shows
+it how much of them it is using, which is the feedback the "don't wake often
+for nothing" rule was missing. This is the fourth piece of the fork's running
+thesis — the wake as an economic unit: the budget warning, batch tool calls,
+result trimming, and now the ledger that prices them all in tokens.
+
+Verified with a fake model: two wakes accumulate (3.0k in, 900 cached, 120
+out over 2 wakes), the page shows the section with prior-wake counts, day
+rollover keeps totals, corrupt state recovers, and batch/budget behavior is
+unchanged.
