@@ -226,8 +226,14 @@ def trim_last_result(messages: list[dict]) -> None:
     and the cut-down version is what every later call in this wake-up sees.
     """
     last = messages[-1]
-    prefix = "Tool result:\n"
-    if last["role"] != "user" or not last["content"].startswith(prefix):
+    # Both the single-call and the batch form, so a batched result is cut
+    # exactly like a single one once a newer result arrives.
+    prefix = None
+    for candidate in ("Tool result:\n", "Tool results:\n"):
+        if last["role"] == "user" and last["content"].startswith(candidate):
+            prefix = candidate
+            break
+    if prefix is None:
         return
     result = last["content"][len(prefix):]
     if len(result) > TRIM_RESULTS_OVER:
