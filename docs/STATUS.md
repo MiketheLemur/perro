@@ -109,3 +109,12 @@ and it stacks with the budget warning: fewer calls burned means more room
 before the refusal. Verified with a fake model: a 2-call batch + singular +
 malformed batch (corrected, not finished) in 4 model calls; budget holds
 mid-batch (10 run, 2 refused); the budget warning still fires exactly once.
+
+**Batch-result trimming fix (2026-10-18, `perro/heartbeat.py`).** `trim_last_result`
+only recognized the singular `"Tool result:"` prefix, so results from the new
+batch form (`"Tool results:"`) were never cut down — every later model call in
+the wake-up would resend the batch's full bulk. It now matches both prefixes.
+Caught by testing the batch feature itself: a 10 KB batched result is whole on
+the call that made it and 192 chars on the next. This is the cost blowup the
+August notes fought (one 10-call wake-up at ~227k input tokens); batches would
+have reopened it.
