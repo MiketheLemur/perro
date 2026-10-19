@@ -27,7 +27,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from perro import alarms, approvals, dream, identity, inbox, n8n, skills, tools, workshop
+from perro import alarms, approvals, dream, identity, inbox, n8n, skills, spend, tools, workshop
 from perro.memory import DEFAULT_HOME, NOTES_CHAR_LIMIT, Memory
 from perro.model import ModelClient, ModelError
 
@@ -343,6 +343,7 @@ def beat(memory: Memory, client: ModelClient, prompt: str = SYSTEM_PROMPT,
                                     f"{memory.snapshot()}\n\n"
                                     f"## Your alarms\n{alarms.describe_pending(memory)}\n\n"
                                     + (f"{asking}\n\n" if asking else "") +
+                                    f"## Spend\n{spend.describe(memory.home)}\n\n"
                                     f"## Your skills\n{skills.describe(memory)}"},
     ]
 
@@ -440,6 +441,8 @@ def beat(memory: Memory, client: ModelClient, prompt: str = SYSTEM_PROMPT,
         # the reply itself was the problem, keep it: it may hold real words.
         detail = f" Reply was: {reply.text[:2000]}" if isinstance(e, json.JSONDecodeError) else ""
         memory.record("error", f"Beat failed: {type(e).__name__}: {e}.{detail}")
+        # The wake still spent tokens; count them even though it failed.
+        spend.record(memory.home, tokens_in, tokens_cached, tokens_out)
         return RETRY_MINUTES
 
     message = decision.get("message")
@@ -465,6 +468,7 @@ def beat(memory: Memory, client: ModelClient, prompt: str = SYSTEM_PROMPT,
             memory.record("error", str(e))
 
     clamped = max(MIN_WAKE_MINUTES, min(MAX_WAKE_MINUTES, minutes))
+    spend.record(memory.home, tokens_in, tokens_cached, tokens_out)
     memory.record(
         "sleep",
         f"Sleeping {clamped} min"
